@@ -29,15 +29,14 @@ app.listen(8080, () => {
   console.log("サーバー起動中");
 });
 
-function CheckRequireParam(req, require){
-  let params = req.body.length > 0 ? req.body: req.query;
+function CheckRequireParam(req, require) {
+  let params = Object.keys(req.body).length > 0 ? req.body : req.query;
+  console.log("CheckRequireParam")
   console.log(params)
-  console.log(req.body)
-  console.log(req.query)
   return new Promise((resolve, reject) => {
     require.forEach(r => {
-      if(r in params){
-        console.log(`${r}はあるよ${params[r]}`)
+      if (r in params) {
+        console.log(`${r}あり [${params[r]}]`)
         return;
       }
       reject(new Error(`必要なプロパティ[${r}]がありません。`));
@@ -50,7 +49,6 @@ function CheckRequireParam(req, require){
 //'/get'でアクセスされた時に、JSONとログを出力するようにする
 app.get('/', (req, res) => {
   res.json({"pet": "dog"});
-  res.end();
 })
 
 app.get('/user/list', (req, res) => {
@@ -61,7 +59,6 @@ app.get('/user/list', (req, res) => {
   knex('USER_TBL').select("*").where({ROOM_ID: req.query.ROOM_ID})
     .then(rows => {
       res.json(rows);
-      res.end();
     })
 });
 
@@ -72,7 +69,6 @@ app.get('/user/info', (req, res) => {
   knex('USER_TBL').select("*").where({USER_ID: req.query.USER_ID, TOKEN: req.query.TOKEN})
     .then(rows => {
       res.json(rows);
-      res.end();
     })
 });
 
@@ -88,7 +84,6 @@ app.post('/user/add', (req, res) => {
     knex('USER_TBL').select("*").where({ROOM_ID: req.body.ROOM_ID})
       .then(rows => {
         res.json(rows);
-        res.end();
       })
   })
 })
@@ -99,7 +94,6 @@ app.post('/room/create', (req, res) => {
       knex('ROOM_TBL').select("*").where({ROOM_ID: r[0]})
         .then(rows => {
           res.json(rows[0]);
-          res.end();
         })
     })
 })
@@ -111,9 +105,84 @@ app.get('/room/info', (req, res) => {
   knex('ROOM_TBL').select("*").where({TOKEN: req.query.TOKEN})
     .then(rows => {
       res.json(rows);
-      res.end();
     })
 })
+app.get('/room/info_by_user', (req, res) => {
+  console.log(req.query.TOKEN)
+  console.log(req.query.USER_ID)
+  CheckRequireParam(req, ["TOKEN", "USER_ID"]).catch(e => {
+    console.log(e.toString())
+  })
+  knex('ROOM_TBL')
+    .whereIn('ROOM_ID', function () {
+      this.select('ROOM_ID')
+        .from('USER_TBL')
+        .where({USER_ID: req.query.USER_ID, TOKEN: req.query.TOKEN});
+    })
+    .select('*')
+  .then(rows => {
+    res.json(rows);
+  })
+})
+app.post('/room/assign/auto', async (req, res) => {
+  await CheckRequireParam(req, ["ROOM_ID"]);
+
+  const shuffleArray = arr => arr.sort(() => Math.random() - 0.5);
+
+  var team = [[1, 1], [1, 0], [2, 1], [2, 0], [3, 1], [3, 0], [4, 1], [4, 0]];
+
+  var partnerRoleList = [4, 5, 6, 7];
+
+  team = shuffleArray(team);
+  partnerRoleList = shuffleArray(partnerRoleList);
+
+  const rows = await knex('USER_TBL').select("USER_ID").where({ROOM_ID: req.body.ROOM_ID});
+
+  if (rows.length !== 8) {
+    return res.status(400).json({error: `ルームメンバーが8人でない(${rows.length}人)`});
+  }
+
+  console.log(team.join(","));
+  console.log(partnerRoleList.join(","));
+  const updatePromises = rows.map((row, i) => {
+    console.log(`${i}番目：ID:${row.USER_ID} TEAM: ${team[i][0]} isLeader: ${team[i][1]}`)
+    var query = knex('USER_TBL')
+      .update({TEAM: team[i][0], ROLE: team[i][1] === 1 ? team[i][0] : partnerRoleList.pop()})
+      .where({USER_ID: row.USER_ID});
+    console.log(query.toQuery());
+    return query;
+  });
+
+  await Promise.all(updatePromises);
+  res.json({success: true});
+})
+
+app.post('/room/next', async (req, res) => {
+  await CheckRequireParam(req, ["ROOM_ID"]);
+
+  knex('ROOM_TBL')
+    .where({ROOM_ID: req.body.ROOM_ID})
+    .update({
+      PHASE: knex.raw(`
+      CASE 
+        WHEN PHASE = 5 THEN 0 
+        ELSE PHASE + 1 
+      END
+    `),
+      DAY: knex.raw(`
+      CASE 
+        WHEN PHASE = 5 THEN DAY + 1 
+        ELSE DAY 
+      END
+    `)
+    }).then(_ => {
+    knex('ROOM_TBL').select("*").where({ROOM_ID: req.body.ROOM_ID})
+      .then(rows => {
+        res.json(rows);
+      })
+  })
+})
+
 app.post('/truncate', (req, res) => {
   console.log("truncate all!")
   knex('ROOM_TBL').truncate().then(_ => {
@@ -122,7 +191,6 @@ app.post('/truncate', (req, res) => {
         knex('PLEDGE_TBL').truncate().then(_ => {
           console.log("truncate completed")
           res.json({})
-          res.end()
         })
       })
     })
