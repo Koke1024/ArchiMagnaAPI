@@ -38,6 +38,8 @@ function CheckRequireParam(req, require) {
       if (r in params) {
         console.log(`${r}あり [${params[r]}]`)
         return;
+      }else{
+        console.log(`${r}なし`)
       }
       reject(new Error(`必要なプロパティ[${r}]がありません。`));
     })
@@ -68,6 +70,19 @@ app.get('/user/info', (req, res) => {
   })
   knex('USER_TBL').select("*").where({USER_ID: req.query.USER_ID, TOKEN: req.query.TOKEN})
     .then(rows => {
+      res.json(rows);
+    })
+});
+
+app.get('/game/log', (req, res) => {
+  CheckRequireParam(req, ["ROOM_ID"]).catch(e => {
+    console.log(e.toString())
+  })
+
+  console.log(knex('ACTION_TBL').select("*").where({ROOM_ID: req.query.ROOM_ID}).toQuery())
+  knex('ACTION_TBL').select("*").where({ROOM_ID: req.query.ROOM_ID})
+    .then(rows => {
+      console.dir(rows)
       res.json(rows);
     })
 });
@@ -165,13 +180,13 @@ app.post('/room/next', async (req, res) => {
     .update({
       PHASE: knex.raw(`
       CASE 
-        WHEN PHASE = 5 THEN 0 
+        WHEN PHASE = 5 OR DAY = 0 THEN 0 
         ELSE PHASE + 1 
       END
     `),
       DAY: knex.raw(`
       CASE 
-        WHEN PHASE = 5 THEN DAY + 1 
+        WHEN PHASE = 0 THEN DAY + 1 
         ELSE DAY 
       END
     `)
@@ -183,10 +198,20 @@ app.post('/room/next', async (req, res) => {
   })
 })
 
+app.post('/game/action', async (req, res) => {
+  await CheckRequireParam(req, ["USER_ID", "ACTION_ID", "TARGET", "DAY", "ROOM_ID"]);
+
+  knex('ACTION_TBL')
+    .insert({ACTION_ID: req.body.ACTION_ID, USER_ID: req.body.USER_ID, MEMO: req.body.TARGET, DAY: req.body.DAY, ROOM_ID: req.body.ROOM_ID})
+    .then(_ => {
+      res.json({})
+  })
+})
+
 app.post('/truncate', (req, res) => {
   console.log("truncate all!")
   knex('ROOM_TBL').truncate().then(_ => {
-    knex('NIGHT_ACTION_TBL').truncate().then(_ => {
+    knex('ACTION_TBL').truncate().then(_ => {
       knex('USER_TBL').truncate().then(_ => {
         knex('PLEDGE_TBL').truncate().then(_ => {
           console.log("truncate completed")
