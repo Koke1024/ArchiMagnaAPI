@@ -64,6 +64,17 @@ app.get('/user/list', (req, res) => {
     })
 });
 
+app.get('/user/names', (req, res) => {
+  CheckRequireParam(req, ["ROOM_ID"]).catch(e => {
+    console.log(e.toString())
+  })
+  console.log(req.query.ROOM_ID)
+  knex('USER_TBL').select(["USER_ID", "USER_NAME"]).where({ROOM_ID: req.query.ROOM_ID})
+    .then(rows => {
+      res.json(rows);
+    })
+});
+
 app.get('/user/info', (req, res) => {
   CheckRequireParam(req, ["USER_ID", "TOKEN"]).catch(e => {
     console.log(e.toString())
@@ -81,6 +92,19 @@ app.get('/game/log', (req, res) => {
 
   console.log(knex('ACTION_TBL').select("*").where({ROOM_ID: req.query.ROOM_ID}).toQuery())
   knex('ACTION_TBL').select("*").where({ROOM_ID: req.query.ROOM_ID})
+    .then(rows => {
+      console.dir(rows)
+      res.json(rows);
+    })
+});
+
+app.get('/game/log/user', (req, res) => {
+  CheckRequireParam(req, ["ROOM_ID", "USER_ID"]).catch(e => {
+    console.log(e.toString())
+  })
+
+  knex('ACTION_TBL').select("*").where({ROOM_ID: req.query.ROOM_ID, USER_ID: req.query.USER_ID})
+    .whereNotIn('ACTION_ID', [9, 10])
     .then(rows => {
       console.dir(rows)
       res.json(rows);
@@ -146,7 +170,7 @@ app.post('/room/assign/auto', async (req, res) => {
 
   var team = [[1, 1], [1, 0], [2, 1], [2, 0], [3, 1], [3, 0], [4, 1], [4, 0]];
 
-  var partnerRoleList = [4, 5, 6, 7];
+  var partnerRoleList = [5, 6, 7, 8];
 
   team = shuffleArray(team);
   partnerRoleList = shuffleArray(partnerRoleList);
@@ -180,13 +204,13 @@ app.post('/room/next', async (req, res) => {
     .update({
       PHASE: knex.raw(`
       CASE 
-        WHEN PHASE = 5 OR DAY = 0 THEN 0 
+        WHEN PHASE = 7 OR DAY = 0 THEN 1 
         ELSE PHASE + 1 
       END
     `),
       DAY: knex.raw(`
       CASE 
-        WHEN PHASE = 0 THEN DAY + 1 
+        WHEN PHASE = 1 THEN DAY + 1 
         ELSE DAY 
       END
     `)
@@ -202,10 +226,70 @@ app.post('/game/action', async (req, res) => {
   await CheckRequireParam(req, ["USER_ID", "ACTION_ID", "TARGET", "DAY", "ROOM_ID"]);
 
   knex('ACTION_TBL')
-    .insert({ACTION_ID: req.body.ACTION_ID, USER_ID: req.body.USER_ID, MEMO: req.body.TARGET, DAY: req.body.DAY, ROOM_ID: req.body.ROOM_ID})
+    .insert({ACTION_ID: req.body.ACTION_ID, USER_ID: req.body.USER_ID, ACTION_TARGET: req.body.TARGET, DAY: req.body.DAY, ROOM_ID: req.body.ROOM_ID})
     .then(_ => {
       res.json({})
   })
+})
+
+app.post('/user/update', async (req, res) => {
+  await CheckRequireParam(req, ["ROOM_ID", "USERS"]);
+
+  const { ROOM_ID, USERS } = req.body;
+
+  try {
+    // `Promise.all` で全ユーザーの更新クエリを並列実行
+    await Promise.all(
+      Object.values(USERS).map((user) => {
+        return knex('USER_TBL')
+          .where({USER_ID: user.USER_ID, ROOM_ID: ROOM_ID})
+          .increment({
+            MANA: user.MANA,
+            HP: user.HP
+          });
+      })
+    ).then(_ => {
+
+      knex('ROOM_TBL').select("*").where({ROOM_ID: ROOM_ID})
+        .then(rows => {
+          var roomInfo = rows[0];
+          Promise.all(
+            Object.values(USERS).map((user) => {
+              if(user.HP === 0){
+                return;
+              }
+              return knex('ACTION_TBL')
+                .insert({USER_ID: user.USER_ID, ROOM_ID: ROOM_ID, DAY: roomInfo.DAY, ACTION_ID: 9, ACTION_TARGET: `[${user.HP}]`});
+            })
+          ).then(_ => {
+            Promise.all(
+              Object.values(USERS).map((user) => {
+                if (user.MANA === 0) {
+                  return;
+                }
+                return knex('ACTION_TBL')
+                  .insert({
+                    USER_ID: user.USER_ID,
+                    ROOM_ID: ROOM_ID,
+                    DAY: roomInfo.DAY,
+                    ACTION_ID: 10,
+                    ACTION_TARGET: `[${user.MANA}]`
+                  });
+              })
+            ).then(_ => {
+              knex('USER_TBL').select("*").where({ROOM_ID: ROOM_ID})
+                .then(rows => {
+                  res.json(rows);
+                })
+            })
+          })
+        })
+    })
+  } catch (err) {
+    console.log(err.message);
+    // エラー時のレスポンス
+    res.status(500).json({ error: 'Failed to update users', details: err.message });
+  }
 })
 
 app.post('/truncate', (req, res) => {
